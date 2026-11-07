@@ -1,0 +1,65 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vllm-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: vllm-mock
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-mock
+  labels:
+    app: vllm-mock
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vllm-mock
+  template:
+    metadata:
+      labels:
+        app: vllm-mock
+    spec:
+      terminationGracePeriodSeconds: 30
+      # Prioritaskan Spot, fallback ke On-Demand jika Spot tidak tersedia
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: node-type
+                operator: In
+                values:
+                - spot
+      containers:
+      - name: mock-engine
+        image: python:3.10-alpine
+        command: ["python", "/app/server.py"]
+        ports:
+        - containerPort: 8000
+        lifecycle:
+          preStop:
+            exec:
+              command:
+                # Beri jeda 5 detik agar kube-proxy/endpoints mencoret pod ini sebelum proses dimatikan
+                - "/bin/sh"
+                - "-c"
+                - "sleep 5"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 2
+          periodSeconds: 3
+        volumeMounts:
+        - name: script-vol
+          mountPath: /app
+      volumes:
+      - name: script-vol
+        configMap:
+          name: mock-vllm-script
